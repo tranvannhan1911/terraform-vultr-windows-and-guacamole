@@ -10,6 +10,10 @@ terraform {
     guacamole = {
       source = "techBeck03/guacamole"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "3.4.3"
+    }
   }
 }
 
@@ -43,10 +47,15 @@ variable "snapshot_id" {
   type    = string
   default = "21d6c0cc-4d97-41eb-bd88-94a6da91e0b5"
 }
+
+variable "snapshot_password" {
+  type    = string
+  default = "a5*L9Y_m]dTTknUz"
+}
 ############ Guacamole arguments ##############
 variable "guacamole_url" {
   type    = string
-  default = "https://45.32.99.175:8443"
+  default = "https://45.32.99.175"
 }
 
 variable "guacamole_username" {
@@ -76,6 +85,9 @@ provider "guacamole" {
   disable_tls_verification = true
 }
 
+provider "random" {
+}
+
 ############ Create VM Vultr ##############
 resource "vultr_instance" "cloud_compute" {
   count       = var.number_of_vm
@@ -96,7 +108,7 @@ resource "guacamole_connection_rdp" "rdp" {
   parameters {
     hostname           = vultr_instance.cloud_compute.*.main_ip[count.index]
     username           = "Administrator"
-    password           = "a5*L9Y_m]dTTknUz"
+    password           = var.snapshot_password
     domain             = "WORKGROUP"
     port               = 3389
     security_mode      = "any"
@@ -104,10 +116,50 @@ resource "guacamole_connection_rdp" "rdp" {
   }
 }
 
+
+############ Random username and password ##############
+resource "random_string" "username" {
+  count   = var.number_of_vm
+  length  = 10
+  special = false
+  upper   = false
+}
+
+resource "random_password" "password" {
+  count            = var.number_of_vm
+  length           = 16
+  special          = true
+  override_special = "!@#$%^&*()-_=+"
+}
+
+############ Create user ##############
+resource "guacamole_user" "user" {
+  count    = var.number_of_vm
+  username = "${random_string.username[count.index].result}_${count.index}"
+  password = random_password.password[count.index].result
+  connections = [
+    guacamole_connection_rdp.rdp[count.index].id
+  ]
+}
+
+############## output ################
 output "cloud_compute_ip_address" {
   value = vultr_instance.cloud_compute.*.main_ip
 }
 
 output "vm_connections" {
   value = guacamole_connection_rdp.rdp.*.id
+}
+
+output "username" {
+  #   value = random_string.username.*.result
+  sensitive = true
+  value = {
+    for i, v in random_string.username :
+    format("user %d", i + 1) => {
+      "username" : "${v.result}_${i}",
+      "password" : random_password.password[i].result,
+      "ip": vultr_instance.cloud_compute.*.main_ip[i]
+    }
+  }
 }
